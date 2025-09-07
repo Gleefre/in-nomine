@@ -30,7 +30,9 @@ Common Lisp has a lot of namespaces whose keys can come in various shapes:
 * slot names (symbols),
 * method combinations (symbols),
 * block names (symbols),
-* tagbody tags (symbols and integers)
+* tagbody tags (symbols and integers),
+* declarations (symbols),
+* lambda list keywords (symbols),
 * catch tags (any Lisp objects),
 * restarts (symbols),
 * packages (strings),
