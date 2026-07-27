@@ -287,17 +287,17 @@
 
 ;;; Let form
 
-(defmacro tmlet ((name lambda-list &body body) &body mlet-body
-                &environment env)
-  (let ((transfer (gensym "MLET-TRANSFER")))
-    `(macrolet ((,transfer (&rest args &environment env)
-                  (funcall ,(macro-function name env)
-                           `(,',name ,@args)
-                           env))
-                (,name ,lambda-list
-                  (let ((,name ',transfer))
-                    ,@body)))
-       ,@mlet-body)))
+(defmacro tmlet (definitions &body body &environment env)
+  `(macrolet (,@(loop for (name lambda-list . body) in definitions
+                      for transfer = (gensym (concatenate 'string "%" (symbol-name name)))
+                      append `((,transfer (&rest args &environment env)
+                                 (funcall ,(macro-function name env)
+                                          `(,',name ,@args)
+                                          env))
+                               (,name ,lambda-list
+                                 (let ((,name ',transfer))
+                                   ,@body)))))
+     ,@body))
 
 (defun get-declared (declarations decl-type test)
   (remove-duplicates
@@ -357,7 +357,8 @@
                                                   (member name specials :test ',test)
                                                   (member name ignorables :test ',test)
                                                   (member name ignored :test ',test))))
-                   (switch-clauses (loop for (var value name special-p ignorable-p ignore-p) in variables
+                   (switch-clauses (loop for (var value name special-p ignorable-p ignore-p)
+                                           in variables
                                          unless special-p
                                            collect `(',name ',var)))
                    (unbound-marker (gensym (with-standard-io-syntax
@@ -379,12 +380,12 @@
                                                    `(,',global-accessor ',name)
                                                    var)
                                        collect value))
-                        (tmlet (,',accessor (name &rest args)
-                                 ,(if switch-clauses  ; workaround alexandria's extra style-warning bug
-                                      `(switch (name :test ,',test)
-                                         ,@switch-clauses
-                                         (t `(,,',accessor ,name ,@args)))
-                                      ``(,,',accessor ,name ,@args)))
+                        (tmlet ((,',accessor (name &rest args)
+                                  ,(if switch-clauses  ; workaround alexandria's extra style-warning bug
+                                       `(switch (name :test ,',test)
+                                          ,@switch-clauses
+                                          (t `(,,',accessor ,name ,@args)))
+                                       ``(,,',accessor ,name ,@args))))
                           (,',locally-name
                            (declare (special ,@specials))
                            ,@body)))
@@ -396,11 +397,11 @@
         (defmacro ,macrolet-name (macrobindings &body body)
           (if macrobindings
               `(progn
-                 (tmlet (,',accessor (name &rest args)
-                          (switch (name :test ,',test)
-                            ,@(loop for (name form) in macrobindings
-                                    collect `(',name ',form))
-                            (t `(,,',accessor ,name ,@args))))
+                 (tmlet ((,',accessor (name &rest args)
+                           (switch (name :test ,',test)
+                             ,@(loop for (name form) in macrobindings
+                                     collect `(',name ',form))
+                             (t `(,,',accessor ,name ,@args)))))
                    ,@body))
               `(progn ,@body)))
         (defmacro ,locally-name (&body body)
@@ -408,11 +409,11 @@
             (let ((specials (get-declared decls 'special ',test)))
               (if specials
                   `(progn
-                     (tmlet (,',accessor (name &rest args)
-                              (switch (name :test ,',test)
-                                ,@(loop for name in specials
-                                        collect `(',name `(,',',global-accessor ',name ,@args)))
-                                (t `(,,',accessor ,name ,@args))))
+                     (tmlet ((,',accessor (name &rest args)
+                               (switch (name :test ,',test)
+                                 ,@(loop for name in specials
+                                         collect `(',name `(,',',global-accessor ',name ,@args)))
+                                 (t `(,,',accessor ,name ,@args)))))
                        ,@body))
                   `(progn ,@body)))))
         (defmacro ,progv-name (names values &body body)
