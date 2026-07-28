@@ -203,84 +203,108 @@
 
 ;;; Definer forms
 
-(defun normalize-arglist (arglist)
-  "Makes sure the argument list contains an &REST parameter for &KEY and
-&OPTIONAL parameters"
-  (multiple-value-bind (required optional rest keywords allow-other-keys? aux
-                        keys?)
-      (parse-ordinary-lambda-list arglist
-                                  :normalize nil)
-    (let ((rest-arg (or rest (gensym "rest"))))
-      (values `(,@required
-                ,@(when optional
-                    `(&optional))
-                ,@optional
-                &rest ,rest-arg
-                ,@(when keys?
-                    `(&key))
-                ,@keywords
-                ,@(when allow-other-keys?
-                    `(&allow-other-keys))
-                ,@(when aux
-                    `(&aux))
-                ,@aux)
-              rest-arg
-              `(,@required ,@(mapcar #'ensure-car
-                                     optional))
-              (mapcar #'ensure-car
-                      keywords)))))
+(defun escape-arglist (arglist)
+  "Removes &whole, &aux and &environment parameters.
+Removes initforms and supplied-p parameters for &optional and &key arguments.
+Replaces all variables with uninterned symbols with the same name.
+Returns the escaped arglist and the list of variables it contains.
+Behavior is undefined if the arglist is malformed."
+  (let (vars)
+    (labels ((rec (arglist)
+               (let* ((args (list '&required))
+                      (tail args)
+                      (state '&required))
+                 (flet ((collect (x &rest more)
+                          (setf (cdr tail) (list* x more) tail (last tail))))
+                   (do () ((null arglist) (cdr args))
+                     (when (symbolp arglist) ; (... . var), or  var  from a recursive call
+                       (let ((var (make-symbol (symbol-name arglist))))
+                         (setf (cdr tail) var)
+                         (push var vars)
+                         (return (cdr args))))
+                     (let ((next (pop arglist)))
+                       (cond
+                         ((eql next '&aux) (return))
+                         ((member next '(&environment &whole)) (pop arglist))
+                         ((member next '(&optional &key))
+                          (setf state next)
+                          (collect next))
+                         ((eql next '&allow-other-keys)
+                          (collect next))
+                         ((member next '(&rest &body))
+                          (collect next (rec (pop arglist))))
+                         ((member next lambda-list-keywords)
+                          (simple-program-error "Unknown lambda-list keyword: ~S" next))
+                         (t (ecase state
+                              ;; var  or  (...)  (destructuring)
+                              (&required (collect (rec next)))
+                              ;; var  or  (var ...)  or  ((...) ...)
+                              (&optional
+                               (let ((result (rec (ensure-car next))))
+                                 (collect (if (listp result) (list result) result))))
+                              ;; var  or  (var ...)  or  ((key var) ...)  or  ((key (...)) ...)
+                              (&key
+                               (let ((key-var (ensure-car next)))
+                                 (if (listp key-var)
+                                     (collect `((,(first key-var) ,(rec (second key-var)))))
+                                     (collect (rec key-var))))))))))))))
+      (values (rec arglist) vars))))
 
-(defun construct-function-definer-form (function name accessor)
-  (let ((g!name (gensym "name")))
-    (multiple-value-bind (arglist rest-argument normal-args k/o-args)
-        (normalize-arglist (cond
-                             ((symbolp function)
-                              (t:arglist function))
-                             ((and (listp function)
-                                   (eq (first function)
-                                       'lambda))
-                              (second function))
-                             (t (error "Malformed function name ~S while ~
-                                        building the definer for ~S"
-                                       function name))))
-      `(defmacro ,name (,g!name ,@arglist)
-         (declare ,@(mapcar (lambda (k/o-arg)
-                              `(ignore ,k/o-arg))
-                            k/o-args))
-         `(setf (,',accessor ',,g!name)
-                (,',(if (and (listp function)
-                             (eq (first function)
-                                 function))
-                        (second function)
-                        function)
-                 ,,@normal-args . ,,rest-argument))))))
+(defun alias-definer-arglist (definer)
+  (let ((arglist
+          (etypecase definer
+            (symbol
+             (if (fboundp definer)
+                 (trivial-arguments:arglist definer)
+                 :unknown))
+            ((cons (eql lambda))
+             (second definer)))))
+    ;; TODO: handle errors in escape-arglist (like when sb-int:&more is used)
+    (if (eql arglist :unknown)
+        (let ((args (make-symbol "AGRS")))
+          (values `(&rest ,args) `(,args)))
+        (escape-arglist arglist))))
+
+(defun alias-definer-form (definer definer-name accessor
+                           &aux (name (make-symbol "NAME"))
+                                (form (gensym "FORM")))
+  (multiple-value-bind (arglist vars) (alias-definer-arglist definer)
+    `(defmacro ,definer-name (&whole ,form ,name ,@arglist)
+       (declare (ignore ,@vars))
+       `(setf (,',accessor ',,name)
+              (,',definer ,@(cddr ,form))))))
+
+(defun simple-definer-form (definer-name accessor)
+  ;; TODO: optional doc argument (like in defparameter)
+  `(defmacro ,definer-name (name value)
+     `(setf (,',accessor ',name) ,value)))
+
+(defun macro-definer-form (definer definer-name accessor
+                           &aux (name (make-symbol "NAME")))
+  (multiple-value-bind (body declarations doc)
+      ;; TODO: when alexandria updates, it would likely be preferable
+      ;; to use :if-duplicate-doc-string :ignore
+      (parse-body (cdr definer) :documentation t)
+    (declare (ignore doc))
+    `(defmacro ,definer-name (,name ,@(car definer))
+       ,@declarations
+       `(setf (,',accessor ',,name) ,(progn ,@body)))))
 
 (defun make-definer-forms (namespace)
-  (let ((g!name (gensym "name"))
-        (name (namespace-definer-name namespace))
+  (let ((definer-name (namespace-definer-name namespace))
         (definer (namespace-definer namespace))
         (accessor (namespace-accessor namespace)))
-    (when name
-      (typecase definer
-        ((eql t)
-         `((defmacro ,name (,g!name obj)
-             `(setf (,',accessor ',,g!name)
-                    ,obj))))
-        (symbol
-         `(,(construct-function-definer-form definer name accessor)))
-        (list
-         (etypecase (first definer)
-           ((or (eql function)
-                (eql quote))
-            `(,(construct-function-definer-form (second definer)
-                                                name accessor)))
-           ((eql lambda)
-            `(,(construct-function-definer-form definer name accessor)))
+    (when definer-name
+      `(,(etypecase definer
+           ;; T
+           ((eql t)
+            (simple-definer-form definer-name accessor))
+           ;; FOO (lambda args . body)
+           ((or symbol (cons (eql lambda)))
+            (alias-definer-form definer definer-name accessor))
+           ;; 'FOO #'FOO '(lambda args . body) #'(lambda args . body)
+           ((cons (or (eql quote) (eql function)) (cons (or symbol (cons (eql lambda))) null))
+            (alias-definer-form (second definer) definer-name accessor))
+           ;; (args . body)
            (list
-            `((defmacro ,name (,g!name ,@(first definer))
-                (let ((g!object (gensym "object")))
-                  `(let ((,g!object (progn
-                                      ,,@(rest definer))))
-                     (setf (,',accessor ',,g!name)
-                           ,g!object)
-                     ,g!object)))))))))))
+            (macro-definer-form definer definer-name accessor)))))))
