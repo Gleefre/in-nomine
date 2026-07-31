@@ -212,7 +212,7 @@ Behavior is undefined if the arglist is malformed.
 Returns a dummy lambda-list of (&rest #:args) if arglist is :unknown or if an
 unknown (implementation-specific) lambda-list keyword is encountered."
   (let (vars)
-    (labels ((fallback (&aux (args (make-symbol "AGRS")))
+    (labels ((fallback (&aux (args (make-symbol "ARGS")))
                (return-from escape-arglist
                  (values `(&rest ,args) `(,args))))
              (rec (arglist)
