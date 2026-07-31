@@ -306,8 +306,8 @@ unknown (implementation-specific) lambda-list keyword is encountered."
            ((or symbol (cons (eql lambda)))
             (alias-definer-form definer definer-name accessor))
            ;; 'FOO #'FOO '(lambda args . body) #'(lambda args . body)
-           ((cons (or (eql quote) (eql function)) (cons (or symbol (cons (eql lambda))) null))
+           ((cons (member quote function) (cons (or symbol (cons (eql lambda))) null))
             (alias-definer-form (second definer) definer-name accessor))
            ;; (args . body)
-           (list
+           (cons
             (macro-definer-form definer definer-name accessor)))))))
