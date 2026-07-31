@@ -208,9 +208,14 @@
 Removes initforms and supplied-p parameters for &optional and &key arguments.
 Replaces all variables with uninterned symbols with the same name.
 Returns the escaped arglist and the list of variables it contains.
-Behavior is undefined if the arglist is malformed."
+Behavior is undefined if the arglist is malformed.
+Returns a dummy lambda-list of (&rest #:args) if arglist is :unknown or if an
+unknown (implementation-specific) lambda-list keyword is encountered."
   (let (vars)
-    (labels ((rec (arglist)
+    (labels ((fallback (&aux (args (make-symbol "AGRS")))
+               (return-from escape-arglist
+                 (values `(&rest ,args) `(,args))))
+             (rec (arglist)
                (let* ((args (list '&required))
                       (tail args)
                       (state '&required))
@@ -234,7 +239,8 @@ Behavior is undefined if the arglist is malformed."
                          ((member next '(&rest &body))
                           (collect next (rec (pop arglist))))
                          ((member next lambda-list-keywords)
-                          (simple-program-error "Unknown lambda-list keyword: ~S" next))
+                          (warn "Unknown lambda-list keyword: ~S" next)
+                          (fallback))
                          (t (ecase state
                               ;; var  or  (...)  (destructuring)
                               (&required (collect (rec next)))
@@ -248,22 +254,19 @@ Behavior is undefined if the arglist is malformed."
                                  (if (listp key-var)
                                      (collect `((,(first key-var) ,(rec (second key-var)))))
                                      (collect (rec key-var))))))))))))))
+      (when (eql arglist :unknown)
+        (fallback))
       (values (rec arglist) vars))))
 
 (defun alias-definer-arglist (definer)
-  (let ((arglist
-          (etypecase definer
-            (symbol
-             (if (fboundp definer)
-                 (trivial-arguments:arglist definer)
-                 :unknown))
-            ((cons (eql lambda))
-             (second definer)))))
-    ;; TODO: handle errors in escape-arglist (like when sb-int:&more is used)
-    (if (eql arglist :unknown)
-        (let ((args (make-symbol "AGRS")))
-          (values `(&rest ,args) `(,args)))
-        (escape-arglist arglist))))
+  (escape-arglist
+   (etypecase definer
+     (symbol
+      (if (fboundp definer)
+          (trivial-arguments:arglist definer)
+          :unknown))
+     ((cons (eql lambda))
+      (second definer)))))
 
 (defun alias-definer-form (definer definer-name accessor
                            &aux (name (make-symbol "NAME"))
