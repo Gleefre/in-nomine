@@ -272,10 +272,10 @@ unknown (implementation-specific) lambda-list keyword is encountered."
                            &aux (name (make-symbol "NAME"))
                                 (form (gensym "FORM")))
   (multiple-value-bind (arglist vars) (alias-definer-arglist definer)
-    `(defmacro ,definer-name (&whole ,form ,name ,@arglist)
+    `(defmacro ,definer-name (&whole ,form ,name . ,arglist)
        (declare (ignore ,@vars))
        `(setf (,',accessor ',,name)
-              (,',definer ,@(cddr ,form))))))
+              (,',definer . ,(cddr ,form))))))
 
 (defun simple-definer-form (definer-name accessor)
   ;; TODO: optional doc argument (like in defparameter)
@@ -289,7 +289,7 @@ unknown (implementation-specific) lambda-list keyword is encountered."
       ;; to use :if-duplicate-doc-string :ignore
       (parse-body (cdr definer) :documentation t)
     (declare (ignore doc))
-    `(defmacro ,definer-name (,name ,@(car definer))
+    `(defmacro ,definer-name (,name . ,(car definer))
        ,@declarations
        `(setf (,',accessor ',,name) ,(progn ,@body)))))
 
